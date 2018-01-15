@@ -54,6 +54,7 @@ class AccountsController(TransactionBase):
 
 		if self.meta.get_field("taxes_and_charges"):
 			self.validate_enabled_taxes_and_charges()
+			self.validate_tax_account_company()
 
 		self.validate_party()
 		self.validate_currency()
@@ -255,6 +256,14 @@ class AccountsController(TransactionBase):
 		if frappe.db.get_value(taxes_and_charges_doctype, self.taxes_and_charges, "disabled"):
 			frappe.throw(_("{0} '{1}' is disabled").format(taxes_and_charges_doctype, self.taxes_and_charges))
 
+	def validate_tax_account_company(self):
+		for d in self.get("taxes"):
+			if d.account_head:
+				tax_account_company = frappe.db.get_value("Account", d.account_head, "company")
+				if tax_account_company != self.company:
+					frappe.throw(_("Row #{0}: Account {1} does not belong to company {2}")
+						.format(d.idx, d.account_head, self.company))
+
 	def get_gl_dict(self, args, account_currency=None):
 		"""this method populates the common properties of a gl entry record"""
 
@@ -374,6 +383,17 @@ class AccountsController(TransactionBase):
 		res = journal_entries + payment_entries
 
 		return res
+
+	def is_inclusive_tax(self):
+		is_inclusive = cint(frappe.db.get_single_value("Accounts Settings",
+			"show_inclusive_tax_in_print"))
+
+		if is_inclusive:
+			is_inclusive = 0
+			if self.get("taxes", filters={"included_in_print_rate": 1}):
+				is_inclusive = 1
+
+		return is_inclusive
 
 	def validate_advance_entries(self):
 		order_field = "sales_order" if self.doctype == "Sales Invoice" else "purchase_order"
@@ -711,11 +731,15 @@ def get_tax_rate(account_head):
 	return frappe.db.get_value("Account", account_head, ["tax_rate", "account_name"], as_dict=True)
 
 @frappe.whitelist()
-def get_default_taxes_and_charges(master_doctype, company=None):
+def get_default_taxes_and_charges(master_doctype, tax_template=None, company=None):
 	if not company: return {}
 
-	default_tax = frappe.db.get_value(master_doctype,
-		{"is_default": 1, "company": company})
+	if tax_template and company:
+		tax_template_company = frappe.db.get_value(master_doctype, tax_template, "company")
+		if tax_template_company == company:
+			return
+
+	default_tax = frappe.db.get_value(master_doctype, {"is_default": 1, "company": company})
 
 	return {
 		'taxes_and_charges': default_tax,
